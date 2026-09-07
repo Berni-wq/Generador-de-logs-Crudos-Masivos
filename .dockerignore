@@ -1,0 +1,18 @@
+# Excluir datos generados (el volumen se monta en tiempo de ejecucion)
+data/
+
+# Excluir reportes y datos de benchmark pre-generados (se generan en runtime).
+# NOTA: bench/ de CODIGO NO se excluye: el Dockerfile lo copia para correr
+# el benchmark y el reporte.
+docs/
+reporte_benchmark_v2.pdf
+bench/*.csv
+bench/*.json
+bench/*.png
+
+# Excluir caches y artefactos
+__pycache__/
+*.pyc
+.git/
+.gitignore
+salida_test/
