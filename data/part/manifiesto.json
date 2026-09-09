@@ -1,0 +1,35 @@
+{
+    "total_eventos_solicitados": 50000,
+    "total_eventos": 50001,
+    "total_bytes": 6448639,
+    "arquitectura": "shard",
+    "workers": 4,
+    "seed": 42,
+    "detalles": [
+        {
+            "worker_id": 0,
+            "archivo": "part-000.jsonl",
+            "eventos": 12502,
+            "bytes": 1612318
+        },
+        {
+            "worker_id": 1,
+            "archivo": "part-001.jsonl",
+            "eventos": 12502,
+            "bytes": 1612416
+        },
+        {
+            "worker_id": 2,
+            "archivo": "part-002.jsonl",
+            "eventos": 12502,
+            "bytes": 1612358
+        },
+        {
+            "worker_id": 3,
+            "archivo": "part-003.jsonl",
+            "eventos": 12495,
+            "bytes": 1611547
+        }
+    ],
+    "duracion_seg": 0.467
+}
