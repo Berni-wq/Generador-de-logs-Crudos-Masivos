@@ -1,23 +1,49 @@
-# Imagen de runtime del generador de logs masivos TPC Sitio 3.
-# Un solo `docker run` hace TODO: genera el dataset, corre el benchmark
-# de escalabilidad y produce el reporte (CSV + grafico + PDF) con los
-# resultados del equipo donde se ejecute.
-FROM python:3.14-slim
+# syntax=docker/dockerfile:1
+# ETAPA 1 — Builder: Instalación limpia y compilación de dependencias
+FROM python:3.12-slim AS builder
+
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
 WORKDIR /app
 
-# Copia el codigo fuente del generador y el benchmark.
-COPY src/ ./src/
-COPY bench/ ./bench/
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Instala matplotlib (unico requisito para los graficos/PDF del reporte).
-# El generador y el benchmark usan unicamente la libreria estandar.
-RUN pip install --no-cache-dir matplotlib
+# ETAPA 2 — Runtime: Imagen final ligera y segura (Hardening)
 
-# Orquestador: corre generacion + benchmark + reporte en secuencia.
-COPY run_all.py ./run_all.py
+FROM python:3.12-slim AS runtime
 
-# Ruta de salida por defecto (sobrescribible con --output en docker run).
-ENV SALIDA=/app/salida
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONFAULTHANDLER=1 \
+    PATH="/opt/venv/bin:$PATH"
 
-ENTRYPOINT ["python", "run_all.py"]
+RUN apt-get update && apt-get install -y --no-install-recommends tini \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --gid 10001 appgroup \
+    && useradd --uid 10001 --gid appgroup --create-home --shell /usr/sbin/nologin appuser
+
+WORKDIR /app
+
+COPY --from=builder /opt/venv /opt/venv
+
+# Copia la carpeta scr respetando los permisos del usuario appuser
+COPY --chown=appuser:appgroup scr/ ./scr/
+
+RUN mkdir -p /app/data && chown -R appuser:appgroup /app/data
+
+USER appuser
+EXPOSE 9009
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+
+CMD ["python", "-u", "scr/receptor.py"]
