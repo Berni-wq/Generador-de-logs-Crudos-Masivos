@@ -1,0 +1,12 @@
+# Dockerfile.v0 — línea base INGENUA
+FROM python:3.12
+
+WORKDIR /app
+
+# Copiamos usando la carpeta "scr" del repositorio
+COPY scr/ /app/scr/
+COPY requirements.txt /app/
+
+RUN pip install -r requirements.txt
+
+CMD ["python", "scr/receptor_tcp.py"]
