@@ -37,7 +37,7 @@ WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 
 # Copia la carpeta scr respetando los permisos del usuario appuser
-COPY --chown=appuser:appgroup scr/ ./scr/
+COPY --chown=appuser:appgroup src/ ./src/
 
 RUN mkdir -p /app/data && chown -R appuser:appgroup /app/data
 
@@ -46,4 +46,4 @@ EXPOSE 9009
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
-CMD ["python", "-u", "scr/receptor.py"]
+CMD ["python", "-u", "src/receptor.py"]
