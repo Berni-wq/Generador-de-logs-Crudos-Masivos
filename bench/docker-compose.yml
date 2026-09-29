@@ -1,0 +1,96 @@
+# Levanta dos servicios en una red bridge privada:
+#   ingestor-tcp     -> scr/receptor.py : escucha y persiste
+#   simulador-puerto -> scr/main.py : genera y envía por TCP
+#
+# Uso:
+#   docker compose up -d --build
+#   docker compose ps
+#   docker compose logs -f simulador-puerto
+#   docker compose down
+#   wc -l data/raw/eventos.jsonl
+
+
+services:
+
+  ingestor-tcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: ${IMAGE_NAME}:${IMAGE_TAG}
+    container_name: tpc-ingestor
+    restart: unless-stopped
+
+    environment:
+      BIND_HOST: ${BIND_HOST}
+      TCP_PORT: ${TCP_PORT}
+      DATA_DIR: ${DATA_DIR}
+      PYTHONUNBUFFERED: "1"
+
+    volumes:
+      - ./data/raw:/app/data/raw
+
+    ports:
+      - "127.0.0.1:${TCP_PORT}:${TCP_PORT}"
+
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import os, socket; socket.create_connection(('127.0.0.1', int(os.environ['TCP_PORT'])), 3).close()"
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+    stop_grace_period: ${STOP_GRACE_PERIOD}
+    mem_limit: ${INGESTOR_MEM_LIMIT}
+    mem_reservation: ${INGESTOR_MEM_RESERVE}
+
+    networks:
+      - tpc-privada
+
+  simulador-puerto:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: ${IMAGE_NAME}:${IMAGE_TAG}
+    container_name: tpc-simulador
+
+    restart: "no"
+
+    command:
+      - python
+      - -u
+      - -m
+      - scr.main
+      - --arch
+      - tcp
+      - --workers
+      - "${WORKERS}"
+      - --total-events
+      - "${TOTAL_EVENTS}"
+      - --seed
+      - "${SEED}"
+
+    environment:
+      TCP_HOST: ${TCP_HOST}
+      TCP_PORT: ${TCP_PORT}
+      BATCH_SIZE: ${BATCH_SIZE}
+
+    depends_on:
+      ingestor-tcp:
+        condition: service_healthy
+
+    mem_limit: ${SIMULADOR_MEM_LIMIT}
+    mem_reservation: ${SIMULADOR_MEM_RESERVE}
+
+    networks:
+      - tpc-privada
+
+networks:
+  tpc-privada:
+    name: tpc-privada
+    driver: bridge
