@@ -1,6 +1,6 @@
 # Levanta dos servicios en una red bridge privada:
-#   ingestor-tcp     -> scr/receptor.py : escucha y persiste
-#   simulador-puerto -> scr/main.py : genera y envía por TCP
+#   ingestor-tcp     -> src/receptor.py : escucha y persiste
+#   simulador-puerto -> src/main.py : genera y envía por TCP
 #
 # Uso:
 #   docker compose up -d --build
