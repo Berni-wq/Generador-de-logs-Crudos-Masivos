@@ -65,7 +65,7 @@ services:
       - python
       - -u
       - -m
-      - scr.main
+      - src.main
       - --arch
       - tcp
       - --workers
