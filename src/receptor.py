@@ -31,6 +31,13 @@ class EstadoReceptor:
         self.cerrando = False
         # Se marca cuando el servidor deja de aceptar conexiones nuevas.
         self.server = None
+        # Conexiones TCP abiertas, para poder cerrarlas de forma activa al apagar.
+        # En Python 3.12 asyncio.Server.wait_closed() espera a que terminen TODOS los
+        # handlers, asi que una conexion colgada lo bloquearia para siempre y el
+        # flush/fsync del archivo no llegaria a ejecutarse nunca.
+        self.writers = set()
+        # Tarea de cierre en curso, para poder esperarla antes de que asyncio.run la cancele.
+        self.cierre_task = None
 
     def escribir_lote(self, lineas):
         ##Escribe un lote ya completo de lineas al archivo compartido.
@@ -55,6 +62,7 @@ async def manejar_conexion(reader, writer, estado: EstadoReceptor):
     """
     peer = writer.get_extra_info("peername")
     estado.conexiones_activas += 1
+    estado.writers.add(writer)
     print(f"[receptor_tcp] conexion abierta: {peer} "
           f"(activas={estado.conexiones_activas})", flush=True)
 
@@ -94,6 +102,7 @@ async def manejar_conexion(reader, writer, estado: EstadoReceptor):
             estado.escribir_lote(buf)
 
         estado.conexiones_activas -= 1
+        estado.writers.discard(writer)
         print(f"[receptor_tcp] conexion cerrada: {peer} "
               f"(activas={estado.conexiones_activas})", flush=True)
 
@@ -120,37 +129,58 @@ async def cierre_ordenado(estado: EstadoReceptor):
     estado.cerrando = True
 
     print("[receptor_tcp] SIGTERM recibido: dejando de aceptar conexiones "
-          "nuevas y esperando conexiones activas...", flush=True)
+          "nuevas y volcando el archivo...", flush=True)
 
     if estado.server is not None:
         estado.server.close()
-        await estado.server.wait_closed()
 
-    """Da margen para que los handlers en curso terminen de escribir su
-    ultimo buffer parcial (el `finally` de manejar_conexion ya se encarga
-    de volcarlo apenas el reader llega a EOF/error). ESPERA_CIERRE_SEG
-    queda por debajo del stop_grace_period de Compose (30s) a proposito,
-     para no arriesgarnos a que Docker mande SIGKILL antes de terminar.
-     """
-    espera = 0.0
-    paso = 0.2
-    while estado.conexiones_activas > 0 and espera < ESPERA_CIERRE_SEG:
-        await asyncio.sleep(paso)
-        espera += paso
+    try:
+        """Volcado INMEDIATO del archivo, antes de esperar nada.
 
-    if estado.conexiones_activas > 0:
+        Es la unica garantia real de no perder eventos: si mas adelante algo falla o
+        Docker manda SIGKILL, lo que ya estaba en el buffer de 4 MiB queda en disco.
+        Va primero a proposito, porque en Python >= 3.12 wait_closed() se bloquea si
+        queda alguna conexion viva y el codigo que viene despues no se alcanzaria.
+        """
+        estado.archivo.flush()
+        os.fsync(estado.archivo.fileno())
+        print(f"[receptor_tcp] flush+fsync completado: "
+              f"{estado.total_eventos:,} eventos, "
+              f"{estado.total_bytes / (1024*1024):.1f} MB", flush=True)
 
-        print(f"[receptor_tcp] AVISO: se agoto la ventana de "
-              f"{ESPERA_CIERRE_SEG}s de espera con "
-              f"{estado.conexiones_activas} conexion(es) todavia activa(s). "
-              f"Se cierra igual para respetar el stop_grace_period.",
-              flush=True)
+        """Cierre activo de las conexiones que sigan abiertas. Al cerrarlas, sus
+        handlers reciben el fin de lectura, salen del bucle y ejecutan su finally,
+        que vuelca el buffer parcial que tuvieran pendiente.
+        """
+        for conexion in list(estado.writers):
+            try:
+                conexion.close()
+            except Exception:
+                pass
 
-    print("SIGTERM recibido: cerrando sockets y haciendo flush del .jsonl",
-          flush=True)
-    estado.archivo.flush()
-    os.fsync(estado.archivo.fileno())
-    estado.archivo.close()
+        """Espera ACOTADA. ESPERA_CIERRE_SEG (25 s) queda por debajo del
+        stop_grace_period de docker-compose.yml (30 s) para no arriesgarse a que
+        Docker mande SIGKILL antes de terminar.
+        """
+        if estado.server is not None:
+            try:
+                await asyncio.wait_for(estado.server.wait_closed(),
+                                       timeout=ESPERA_CIERRE_SEG)
+            except asyncio.TimeoutError:
+                print(f"[receptor_tcp] AVISO: wait_closed() no completo en "
+                      f"{ESPERA_CIERRE_SEG}s; se cierra igual para respetar el "
+                      f"stop_grace_period.", flush=True)
+
+    finally:
+        """Volcado final: recoge lo que hayan escrito los handlers al terminar y
+        cierra el archivo. Va en finally para que el archivo quede cerrado y
+        sincronizado aunque la espera haya fallado.
+        """
+        try:
+            estado.archivo.flush()
+            os.fsync(estado.archivo.fileno())
+        finally:
+            estado.archivo.close()
 
     print(f"[receptor_tcp] cierre limpio. Total: "
           f"{estado.total_eventos:,} eventos, "
@@ -173,7 +203,7 @@ async def main():
 
 
     def _pedir_cierre():
-        asyncio.ensure_future(cierre_ordenado(estado))
+        estado.cierre_task = asyncio.ensure_future(cierre_ordenado(estado))
 
     for sig in (signal.SIGTERM, signal.SIGINT):
         try:
@@ -190,6 +220,15 @@ async def main():
 
     async with server:
         await server.serve_forever()
+
+    # serve_forever() vuelve en cuanto server.close() se ejecuta, pero el volcado final
+    # del archivo ocurre en la tarea de cierre. Hay que esperarla aqui: si main() volviera
+    # antes, asyncio.run() cancelaria esa tarea a mitad del flush y se perderian eventos.
+    if estado.cierre_task is not None:
+        try:
+            await estado.cierre_task
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
